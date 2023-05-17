@@ -19,12 +19,11 @@ var relays = []string{
 	"wss://relay-jp.nostr.wirednet.jp/",
 	"wss://relay.nostr.band/",
 	"wss://relay.nostrich.land/",
-	"wss://universe.nostrich.land/?lang=ja&lang=en",
+	//"wss://universe.nostrich.land/?lang=ja&lang=en",
 }
 
 type forwarder struct {
 	relays []*nostr.Relay
-	wg     sync.WaitGroup
 }
 
 func (d *forwarder) Name() string { return "ForwardOnlyRelay" }
@@ -57,29 +56,45 @@ func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool { re
 func (d *forwarder) DeleteEvent(ctx context.Context, id string, pubkey string) error { return nil }
 func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error         { return nil }
 func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan *nostr.Event, error) {
-	m := make(map[string]*nostr.Event)
-	for _, r := range d.relays {
-		if r == nil {
-			continue
-		}
-		evs, err := r.QuerySync(context.TODO(), *filter)
-		if err != nil {
-			continue
-		}
-		for _, ev := range evs {
-			m[ev.ID] = ev
-		}
-	}
-	ids := []string{}
-	for k := range m {
-		ids = append(ids, k)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		return m[ids[i]].CreatedAt < m[ids[j]].CreatedAt
-	})
 	ch := make(chan *nostr.Event, len(d.relays))
 	go func() {
 		defer close(ch)
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+
+		m := make(map[string]*nostr.Event)
+		for i, r := range d.relays {
+			if r == nil {
+				continue
+			}
+			if i > 0 && filter.Kinds != nil && filter.Kinds[0] == 3 {
+				continue
+			}
+			wg.Add(1)
+			r := r
+			go func() {
+				defer wg.Done()
+				evs, err := r.QuerySync(context.Background(), *filter)
+				if err != nil {
+					return
+				}
+				for _, ev := range evs {
+					mu.Lock()
+					m[ev.ID] = ev
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+
+		ids := []string{}
+		for k := range m {
+			ids = append(ids, k)
+		}
+		sort.Slice(ids, func(i, j int) bool {
+			return m[ids[i]].CreatedAt < m[ids[j]].CreatedAt
+		})
 		for _, id := range ids {
 			ch <- m[id]
 		}
