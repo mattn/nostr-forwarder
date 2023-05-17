@@ -28,6 +28,9 @@ type forwarder struct {
 
 func (d *forwarder) Name() string { return "ForwardOnlyRelay" }
 func (d *forwarder) Init() error {
+	if len(d.relays) > 0 {
+		return nil
+	}
 	d.relays = make([]*nostr.Relay, len(relays))
 	go func() {
 		for i := range relays {
@@ -37,12 +40,13 @@ func (d *forwarder) Init() error {
 					continue
 				}
 				d.relays[i] = rr
+				log.Println("connected", relays[i])
 			} else if d.relays[i].ConnectionError != nil {
 				d.relays[i] = nil
 				continue
 			}
 		}
-		time.Sleep(time.Second)
+		time.Sleep(10 * time.Second)
 	}()
 	return nil
 }
@@ -56,6 +60,7 @@ func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool { re
 func (d *forwarder) DeleteEvent(ctx context.Context, id string, pubkey string) error { return nil }
 func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error         { return nil }
 func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan *nostr.Event, error) {
+	log.Println("query", filter)
 	ch := make(chan *nostr.Event, len(d.relays))
 	go func() {
 		defer close(ch)
@@ -64,11 +69,8 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 		var mu sync.Mutex
 
 		m := make(map[string]*nostr.Event)
-		for i, r := range d.relays {
+		for _, r := range d.relays {
 			if r == nil {
-				continue
-			}
-			if i > 0 && filter.Kinds != nil && filter.Kinds[0] == 3 {
 				continue
 			}
 			wg.Add(1)
@@ -77,6 +79,7 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 				defer wg.Done()
 				evs, err := r.QuerySync(context.Background(), *filter)
 				if err != nil {
+					log.Println("error", r.URL, err)
 					return
 				}
 				for _, ev := range evs {
@@ -98,6 +101,7 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 		for _, id := range ids {
 			ch <- m[id]
 		}
+		log.Printf("received %d events", len(ids))
 	}()
 	return ch, nil
 }
