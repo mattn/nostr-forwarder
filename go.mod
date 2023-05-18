@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/fiatjaf/relayer/v2 v2.0.0-20230508154911-c4a678da1ec9
 	github.com/nbd-wtf/go-nostr v0.18.0
+	go.uber.org/atomic v1.11.0
 )
 
 require (

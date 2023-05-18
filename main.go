@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -9,17 +11,23 @@ import (
 
 	"github.com/fiatjaf/relayer/v2"
 	"github.com/nbd-wtf/go-nostr"
+	"go.uber.org/atomic"
 )
 
-var relays = []string{
-	//"wss://nostr-relay.nokotaro.com/",
-	//"wss://nostr.compile-error.net/",
-	//"wss://nostr.h3z.jp/",
-	"wss://nostr.wine/",
-	"wss://relay-jp.nostr.wirednet.jp/",
-	"wss://relay.nostr.band/",
-	"wss://relay.nostrich.land/",
-	//"wss://universe.nostrich.land/?lang=ja&lang=en",
+type Relay struct {
+	URL   string
+	Write bool
+}
+
+var relays = []Relay{
+	{URL: "wss://nostr.compile-error.net/", Write: true},
+	{URL: "wss://relay.nostr.band/", Write: true},
+	{URL: "wss://nostr-relay.nokotaro.com/", Write: true},
+	{URL: "wss://universe.nostrich.land/?lang=ja&lang=en", Write: false},
+	{URL: "wss://relay.nostrich.land/", Write: true},
+	{URL: "wss://relay-jp.nostr.wirednet.jp/", Write: true},
+	{URL: "wss://nostr.wine/", Write: true},
+	{URL: "wss://nostr.h3z.jp/", Write: true},
 }
 
 type forwarder struct {
@@ -35,7 +43,7 @@ func (d *forwarder) Init() error {
 	go func() {
 		for i := range relays {
 			if d.relays[i] == nil {
-				rr, err := nostr.RelayConnect(context.TODO(), relays[i])
+				rr, err := nostr.RelayConnect(context.TODO(), relays[i].URL)
 				if err != nil {
 					continue
 				}
@@ -54,14 +62,57 @@ func (d *forwarder) Init() error {
 func (f *forwarder) Storage(ctx context.Context) relayer.Storage {
 	return f
 }
-func (d *forwarder) BeforeSave(ctx context.Context, evt *nostr.Event)       {}
-func (d *forwarder) AfterSave(ctx context.Context, evt *nostr.Event)        {}
-func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool { return true }
 
-func (d *forwarder) DeleteEvent(ctx context.Context, id string, pubkey string) error { return nil }
-func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error         { return nil }
+func (d *forwarder) BeforeSave(ctx context.Context, evt *nostr.Event) {
+}
+
+func (d *forwarder) AfterSave(ctx context.Context, evt *nostr.Event) {
+}
+
+func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool {
+	return true
+}
+
+func (d *forwarder) DeleteEvent(ctx context.Context, id string, pubkey string) error {
+	log.Println("DeleteEvent", id)
+
+	fmt.Println(id, pubkey)
+	return nil
+}
+
+func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error {
+	log.Println("SaveEvent", event.Kind)
+
+	var success atomic.Int64
+	var wg sync.WaitGroup
+	for i, r := range d.relays {
+		if r == nil || !relays[i].Write {
+			continue
+		}
+		wg.Add(1)
+		r := r
+		go func() {
+			defer wg.Done()
+			status, err := r.Publish(context.Background(), *event)
+			if err != nil {
+				log.Println("error", r.URL, err)
+				return
+			}
+			if err == nil && status != nostr.PublishStatusFailed {
+				success.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if success.Load() == 0 {
+		return errors.New("cannot post")
+	}
+	return nil
+}
+
 func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan *nostr.Event, error) {
-	log.Println("queryevent", filter.Kinds)
+	log.Println("QueryEvent", filter.Kinds)
+
 	ch := make(chan *nostr.Event, len(d.relays))
 	go func() {
 		defer close(ch)
