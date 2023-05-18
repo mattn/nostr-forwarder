@@ -12,9 +12,9 @@ import (
 )
 
 var relays = []string{
-	"wss://nostr-relay.nokotaro.com/",
-	"wss://nostr.compile-error.net/",
-	"wss://nostr.h3z.jp/",
+	//"wss://nostr-relay.nokotaro.com/",
+	//"wss://nostr.compile-error.net/",
+	//"wss://nostr.h3z.jp/",
 	"wss://nostr.wine/",
 	"wss://relay-jp.nostr.wirednet.jp/",
 	"wss://relay.nostr.band/",
@@ -42,6 +42,7 @@ func (d *forwarder) Init() error {
 				d.relays[i] = rr
 				log.Println("connected", relays[i])
 			} else if d.relays[i].ConnectionError != nil {
+				log.Println("closed", relays[i])
 				d.relays[i] = nil
 				continue
 			}
@@ -60,7 +61,7 @@ func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool { re
 func (d *forwarder) DeleteEvent(ctx context.Context, id string, pubkey string) error { return nil }
 func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error         { return nil }
 func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan *nostr.Event, error) {
-	log.Println("query", filter)
+	log.Println("queryevent", filter.Kinds)
 	ch := make(chan *nostr.Event, len(d.relays))
 	go func() {
 		defer close(ch)
@@ -77,11 +78,13 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 			r := r
 			go func() {
 				defer wg.Done()
+				log.Printf("send query to %v", r.URL)
 				evs, err := r.QuerySync(context.Background(), *filter)
 				if err != nil {
 					log.Println("error", r.URL, err)
 					return
 				}
+				log.Printf("received result from %v", r.URL)
 				for _, ev := range evs {
 					mu.Lock()
 					m[ev.ID] = ev
