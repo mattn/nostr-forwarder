@@ -3,9 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,10 +20,19 @@ import (
 	"go.uber.org/atomic"
 )
 
+const (
+	urlPattern = `https?://[-A-Za-z0-9+&@#\/%?=~_|!:,.;\(\)]+`
+)
+
 type Relay struct {
 	URL   string
 	Write bool
 }
+
+var (
+	rewriteURLs bool
+	urlRe       = regexp.MustCompile(urlPattern)
+)
 
 var relays = []Relay{
 	{URL: "wss://nostr.compile-error.net/", Write: true},
@@ -153,6 +168,19 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 			return m[ids[i]].CreatedAt < m[ids[j]].CreatedAt
 		})
 		for _, id := range ids {
+			if rewriteURLs {
+				matches := urlRe.FindAllStringSubmatchIndex(m[id].Content, -1)
+				content := m[id].Content
+				result := ""
+				for _, m := range matches {
+					result += content[:m[0]]
+					result += "http://0.0.0.0:7447?url=" + url.QueryEscape(content[m[0]:m[1]])
+				}
+				if len(matches) > 0 {
+					result += content[matches[len(matches)-1][1]:]
+				}
+				m[id].Content = result
+			}
 			ch <- m[id]
 		}
 		log.Printf("received %d events", len(ids))
@@ -161,11 +189,36 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter *nostr.Filter) (chan
 }
 
 func main() {
+	flag.BoolVar(&rewriteURLs, "rewrite", false, "rewrite URLs")
+	flag.Parse()
+
 	var r forwarder
 	server, err := relayer.NewServer(&r)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
 	}
+	server.Router().HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		u := r.URL.Query().Get("url")
+		resp, err := http.Get(u)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if !strings.HasPrefix(resp.Header.Get("content-type"), "image/") {
+			http.Redirect(w, r, u, http.StatusFound)
+			return
+		}
+
+		for k, v := range resp.Header {
+			for _, vv := range v {
+				w.Header().Add(k, vv)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
 	if err := server.Start("0.0.0.0", 7447); err != nil {
 		log.Fatalf("server terminated: %v", err)
 	}
