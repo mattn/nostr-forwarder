@@ -13,55 +13,64 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-const (
-	urlPattern = `https?://[-A-Za-z0-9+&@#\/%?=~_|!:,.;\(\)]+`
-)
-
 type forwarder struct {
-	ctx    context.Context
 	relays []string
 	pool   *nostr.SimplePool
+}
+
+type storage struct {
+	f *forwarder
 }
 
 var (
 	_ relayer.Relay = (*forwarder)(nil)
 )
 
-func (d *forwarder) Name() string {
+func (f *forwarder) Name() string {
 	return "ForwardOnlyRelay"
 }
 
-func (d *forwarder) Init() error {
-	d.ctx = context.Background()
-	d.pool = nostr.NewSimplePool(d.ctx)
-	for _, v := range d.relays {
-		_, err := d.pool.EnsureRelay(v)
-		if err != nil {
-			log.Println(err)
-		}
+func (f *forwarder) Init() error {
+	f.pool = nostr.NewSimplePool(context.Background())
+	for _, v := range f.relays {
+		go func(v string) {
+			log.Println(v, "connecting")
+			_, err := f.pool.EnsureRelay(v)
+			if err != nil {
+				log.Println(v, err)
+			} else {
+				log.Println(v, "connected")
+			}
+		}(v)
 	}
 	return nil
 }
 
-func (f *forwarder) Storage(ctx context.Context) eventstore.Store {
-	return f
-}
-
-func (f *forwarder) Close() {
-}
-
-func (d *forwarder) AcceptEvent(ctx context.Context, ev *nostr.Event) bool {
-	return true
-}
-
-func (d *forwarder) DeleteEvent(ctx context.Context, ev *nostr.Event) error {
+func (s *storage) Init() error {
 	return nil
 }
 
-func (d *forwarder) SaveEvent(ctx context.Context, evt *nostr.Event) error {
+func (f *forwarder) Storage(ctx context.Context) eventstore.Store {
+	return &storage{
+		f: f,
+	}
+}
+
+func (f *storage) Close() {
+}
+
+func (s *forwarder) AcceptEvent(ctx context.Context, ev *nostr.Event) bool {
+	return true
+}
+
+func (s *storage) DeleteEvent(ctx context.Context, ev *nostr.Event) error {
+	return nil
+}
+
+func (s *storage) SaveEvent(ctx context.Context, evt *nostr.Event) error {
 	var success atomic.Int64
 	var wg sync.WaitGroup
-	d.pool.Relays.Range(func(k string, v *nostr.Relay) bool {
+	s.f.pool.Relays.Range(func(k string, v *nostr.Relay) bool {
 		wg.Add(1)
 		go func(v *nostr.Relay) {
 			defer wg.Done()
@@ -82,11 +91,11 @@ func (d *forwarder) SaveEvent(ctx context.Context, evt *nostr.Event) error {
 	return nil
 }
 
-func (d *forwarder) QueryEvents(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
+func (s *storage) QueryEvents(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
 	log.Println("QueryEvent", filter.Kinds)
 
-	ch := make(chan *nostr.Event)
-	sub := d.pool.SubMany(context.Background(), d.relays, nostr.Filters{filter})
+	ch := make(chan *nostr.Event, 5)
+	sub := s.f.pool.SubMany(context.Background(), s.f.relays, nostr.Filters{filter})
 	go func() {
 		defer close(ch)
 		for {
@@ -94,6 +103,7 @@ func (d *forwarder) QueryEvents(ctx context.Context, filter nostr.Filter) (chan 
 			if !ok {
 				break
 			}
+			log.Println(v.Event)
 			ch <- v.Event
 		}
 	}()
