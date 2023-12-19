@@ -110,19 +110,30 @@ func (s *storage) QueryEvents(ctx context.Context, filter nostr.Filter) (chan *n
 	return ch, nil
 }
 
+type arrayFlags []string
+
+func (i *arrayFlags) String() string {
+	return "relays"
+}
+
+func (i *arrayFlags) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
 func main() {
+	var relays arrayFlags = []string{
+		"wss://nostr.compile-error.net/",
+		"wss://relay.nostr.band/",
+		"wss://nostr-relay.nokotaro.com/",
+		"wss://relay-jp.nostr.wirednet.jp/",
+		"wss://nostr.wine/",
+		"wss://yabu.me/",
+	}
+	flag.Var(&relays, "relay", "multiple relays can be specified")
 	flag.Parse()
 
-	r := forwarder{
-		relays: []string{
-			"wss://nostr.compile-error.net/",
-			"wss://relay.nostr.band/",
-			"wss://nostr-relay.nokotaro.com/",
-			"wss://relay-jp.nostr.wirednet.jp/",
-			"wss://nostr.wine/",
-			"wss://yabu.me/",
-		},
-	}
+	r := forwarder{}
 	server, err := relayer.NewServer(&r)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
