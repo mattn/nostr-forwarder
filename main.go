@@ -50,22 +50,22 @@ func (f *forwarder) Storage(ctx context.Context) eventstore.Store {
 func (f *forwarder) Close() {
 }
 
+func (d *forwarder) AcceptEvent(ctx context.Context, ev *nostr.Event) bool {
+	return true
+}
+
 func (d *forwarder) DeleteEvent(ctx context.Context, ev *nostr.Event) error {
 	return nil
 }
 
-func (d *forwarder) AcceptEvent(ctx context.Context, evt *nostr.Event) bool {
-	return true
-}
-
-func (d *forwarder) SaveEvent(ctx context.Context, event *nostr.Event) error {
+func (d *forwarder) SaveEvent(ctx context.Context, evt *nostr.Event) error {
 	var success atomic.Int64
 	var wg sync.WaitGroup
 	d.pool.Relays.Range(func(k string, v *nostr.Relay) bool {
 		wg.Add(1)
 		go func(v *nostr.Relay) {
 			defer wg.Done()
-			err := v.Publish(context.Background(), *event)
+			err := v.Publish(context.Background(), *evt)
 			if err != nil {
 				log.Println("error", v.URL, err)
 				return
